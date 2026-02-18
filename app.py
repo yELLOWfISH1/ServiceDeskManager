@@ -3,7 +3,18 @@ Service Desk Manager - PySide6 GUI Application
 Professional service desk automation tool
 """
 import sys
+import os
 from pathlib import Path
+
+# Suppress DPI warnings
+os.environ['QT_LOGGING_RULES'] = '*.debug=false;qt.qpa.*=false'
+os.environ['QT_QPA_PLATFORM'] = 'windows'
+
+try:
+    import ctypes
+    ctypes.windll.shcore.SetProcessDpiAwarenessContext(-4)
+except Exception:
+    pass
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -18,6 +29,9 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from src.config import APP_TITLE, APP_WIDTH, APP_HEIGHT, OUTPUT_DIR
 from src.email_tab import EmailTab
 from src.ping_tab import PingTab
+from src.settings_tab import SettingsTab
+from src.ad_tab import ADTab
+from src.rdp_tab import RDPTab
 from src.logger import log_info, log_error
 
 
@@ -263,13 +277,25 @@ class SendEmailsManager(QMainWindow):
         tabs = QTabWidget()
         tabs.setObjectName("mainTabs")
         
-        # Email tab (primary)
+        # Settings tab (first - for credentials)
+        settings_tab = SettingsTab()
+        tabs.addTab(settings_tab, "Settings")
+        
+        # Email tab
         email_tab = EmailTab()
         tabs.addTab(email_tab, "Send Emails")
         
-        # Ping tab (secondary)
+        # Ping tab
         ping_tab = PingTab()
         tabs.addTab(ping_tab, "Ping Hosts")
+        
+        # AD tab (pass settings_tab reference)
+        ad_tab = ADTab(settings_tab)
+        tabs.addTab(ad_tab, "AD")
+        
+        # RDP tab (pass settings_tab reference)
+        rdp_tab = RDPTab(settings_tab)
+        tabs.addTab(rdp_tab, "RDP")
         
         main_layout.addWidget(tabs, 1)
         
@@ -292,8 +318,7 @@ class SendEmailsManager(QMainWindow):
         layout.addWidget(title)
         
         subtitle = QLabel(
-            "This is for Scotiabank Service Desk for sending bulk emails to customers "
-            "for upcoming changes, to include as much information as possible"
+            "This is for Scotiabank Service Desk for automating common tasks. Use the tabs to navigate between features."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
@@ -346,18 +371,40 @@ class SendEmailsManager(QMainWindow):
         
         about_text = f"""{APP_TITLE}
 
-Version: 1.0
+Version: 2.0
+Created by: Jack Whatley
 
 Description:
-This is for Scotiabank Service Desk for sending bulk emails to customers for upcoming changes. The tool is designed to include as much information as possible in each message, validate templates, and streamline bulk communication workflows.
+Service Desk Manager is a comprehensive automation tool for service desk operations. It combines email management, network diagnostics, RDP session management, and Active Directory operations into a unified professional interface.
 
 Features:
-• Compose and send bulk emails using Outlook templates
-• Extract and map template keywords to spreadsheet columns
-• Preview messages and send in preview mode
-• Secondary utilities for resolving hostnames and pinging IPs
+📧 Email Management
+• Bulk email sending with Outlook template support
+• Dynamic keyword mapping and replacement
+• Preview mode and progress tracking
 
-Built with PySide6 for a professional interface."""
+🔍 Network Diagnostics
+• Batch ping operations with concurrent execution
+• DNS resolution and response time tracking
+• CSV export for reporting
+
+🖥️ RDP Management
+• Bulk RDP session launcher
+• Auto-typer for credentials (useful when copy/paste is disabled)
+• Always-on-top popup with 3-second countdown
+
+🗂️ Active Directory
+• Computer deletion with safety confirmations
+• PC movement (single and bulk) between OUs
+• User search by name or ID with Windows-style OU paths
+• Full LDAP integration with permission handling
+
+🔐 Security
+• In-memory credential storage (no disk persistence)
+• Password field copy/paste protection
+• Secure credential management
+
+Built with PySide6 and Python."""
         
         QMessageBox.information(self, "About", about_text)
 

@@ -1,6 +1,8 @@
-# Service Desk Manager
+# Service Desk Manager v2.0
 
-A comprehensive service desk automation tool for managing email campaigns and network diagnostics with templating support.
+A comprehensive service desk automation tool for managing email campaigns, network diagnostics, RDP session management, and Active Directory operations.
+
+**Created by Jack Whatley**
 
 ## Features
 
@@ -20,11 +22,44 @@ A comprehensive service desk automation tool for managing email campaigns and ne
 - **CSV Export**: Save results to CSV file for reporting
 - **Response Time Tracking**: Capture ping response times for performance analysis
 
+### 🖥️ RDP Management
+- **Bulk RDP Session Launcher**: Launch multiple RDP sessions simultaneously from a list of computer names or IPs
+- **RDP Credential Auto-Typer**: Always-on-top popup window that auto-types credentials into RDP sessions
+  - Useful when copy/paste is disabled in RDP
+  - 3-second countdown before typing
+  - Options: Username only, Password only, or Both
+  - Auto-types credentials with Tab and Enter key simulation
+  - Window stays pinned on top of all applications
+
+### 🗂️ Active Directory Management
+- **Computer Deletion**: Delete computers from Active Directory with safety confirmations
+  - Shows computer description and current OU before deletion
+  - Warns user to check ServiceNow before proceeding
+  - Permission checking with user-friendly error messages
+- **PC Movement**: Move computers between Organizational Units
+  - Single computer movement with dropdown OU selection
+  - Bulk movement from Excel spreadsheet import
+  - Pre-configured OU list from config file
+- **User Search**: Search for users by full name or user ID
+  - Searches both displayName and sAMAccountName
+  - Displays Windows-style OU path (e.g., domain.com\IT\Users)
+  - Does not require admin credentials
+- **LDAP Integration**: Full Active Directory integration with error handling
+  - Connection management with configurable LDAP server
+  - Permission error detection and user-friendly messages
+  - DN to Windows path conversion for readability
+
 ### 📁 Template Management
 - **Template Repository**: Store and manage multiple email templates
 - **Auto-Sync**: Templates are automatically copied to Outlook's template folder on startup
 - **Quick Access**: Dropdown selection of all available templates
 - **Refresh Function**: Reload template list without restarting
+
+### 🔐 Security
+- **In-Memory Credentials**: Admin credentials stored in memory only (deleted on app close)
+- **No Disk Persistence**: Credentials never written to disk
+- **Copy/Paste Protection**: Password fields block copy/paste operations
+- **Secure Input**: Password fields use masked input
 
 ## How It Works
 
@@ -70,6 +105,69 @@ A comprehensive service desk automation tool for managing email campaigns and ne
 1. Click "Export Results" to save to CSV
 2. File saved to `output/ping_results.csv`
 
+### RDP Tab (Step-by-Step)
+
+**Launch RDP Sessions:**
+1. Enter computer names or IP addresses (one per line) in the text area
+2. Click "Launch RDP Sessions" to open multiple RDP windows simultaneously
+3. Status shows number of sessions launched
+
+**RDP Credential Auto-Typer:**
+1. Set your admin credentials in the Settings tab first
+2. Click "Open Auto-Typer" to launch the always-on-top popup window
+3. In your RDP session, click the appropriate button:
+   - **Username**: Auto-types username only
+   - **Password**: Auto-types password + presses Enter
+   - **Both**: Auto-types username + Tab + password + Enter
+4. 3-second countdown appears before typing begins
+5. Window stays pinned on top for easy access across multiple RDP sessions
+6. Useful when copy/paste is disabled in RDP environments
+
+### Active Directory Tab (Step-by-Step)
+
+**Delete Computer:**
+1. Set your admin credentials in the Settings tab first
+2. Enter the computer hostname to delete
+3. Click "Delete Computer"
+4. Review the confirmation dialog showing:
+   - Computer description
+   - Current OU path
+   - Warning to check ServiceNow first
+5. Confirm to permanently delete from Active Directory
+
+**Move Computer (Single):**
+1. Set your admin credentials in the Settings tab first
+2. Enter the computer hostname to move
+3. Select target Organizational Unit from dropdown
+4. Click "Move Computer"
+5. Computer is moved to the selected OU
+
+**Move Computer (Bulk):**
+1. Prepare an Excel file with a "hostname" column
+2. Click "Browse..." to select the Excel file
+3. Select target Organizational Unit from dropdown
+4. Click "Bulk Move"
+5. All computers in the spreadsheet are moved to the selected OU
+6. Status shows success/failure count
+
+**User Search:**
+1. Enter user's full name or user ID
+2. Click "Search User"
+3. Results display:
+   - Full name (displayName)
+   - User ID (sAMAccountName)
+   - OU path in Windows format (e.g., domain.com\IT\Users)
+4. No admin credentials required for this operation
+
+### Settings Tab
+
+**Configure Credentials:**
+1. Enter your admin username (e.g., domain\username)
+2. Enter your admin password (masked input, copy/paste blocked)
+3. Credentials stored in memory only
+4. Credentials deleted when application closes
+5. Never written to disk for security
+
 ## Installation
 
 ### Requirements
@@ -77,6 +175,7 @@ A comprehensive service desk automation tool for managing email campaigns and ne
 - Python 3.8+
 - Microsoft Outlook (for email functionality)
 - Excel or CSV files for data
+- LDAP/Active Directory access (for AD operations)
 
 ### Setup
 
@@ -85,7 +184,19 @@ A comprehensive service desk automation tool for managing email campaigns and ne
    pip install -r requirements.txt
    ```
 
-2. **Run the application**:
+2. **Configure Active Directory (Optional)**:
+   - Edit `src/config.ini` with your LDAP server details:
+   ```ini
+   [AD]
+   ldap_server = dc.yourdomain.com
+   ldap_port = 389
+   ldap_base_dn = DC=yourdomain,DC=com
+   organizational_units = Workstations:OU=Workstations,OU=Computers,DC=yourdomain,DC=com | Servers:OU=Servers,OU=Computers,DC=yourdomain,DC=com
+   ```
+   - Use pipe (|) to separate multiple OUs
+   - Format: `FriendlyName:LDAP_DN | FriendlyName:LDAP_DN`
+
+3. **Run the application**:
    ```bash
    python app.py
    ```
@@ -112,12 +223,16 @@ SendEmailsManager/
 ├── README.md            # This file
 ├── src/
 │   ├── __init__.py
-│   ├── app.py           # (Legacy, replaced by app.py in root)
 │   ├── config.py        # Configuration and paths
+│   ├── config.ini       # LDAP/AD configuration
 │   ├── email_manager.py # Email sending logic
 │   ├── email_tab.py     # Email UI tab
 │   ├── ping_manager.py  # Ping operations logic
 │   ├── ping_tab.py      # Ping UI tab
+│   ├── rdp_tab.py       # RDP session and auto-typer UI
+│   ├── ad_tab.py        # Active Directory operations UI
+│   ├── settings_tab.py  # Credential management UI
+│   ├── ldap_manager.py  # LDAP/AD operations logic
 │   ├── template_manager.py  # Template handling
 │   ├── utils.py         # Utility functions
 │   └── __pycache__/     # Python cache
@@ -165,12 +280,29 @@ View logs in **Windows Event Viewer** under:
 
 ## Configuration
 
+### Email Configuration
 Edit `src/config.py` to customize:
 - Default BCC email address
 - Outlook templates path
 - Output directory
 - Timeout values
 - Application title
+
+### Active Directory Configuration
+Edit `src/config.ini` to configure LDAP/AD settings:
+- **ldap_server**: Your domain controller hostname or IP
+- **ldap_port**: LDAP port (default: 389)
+- **ldap_base_dn**: Base distinguished name for your domain
+- **organizational_units**: Pipe-separated list of OUs in format `FriendlyName:LDAP_DN`
+
+Example `config.ini`:
+```ini
+[AD]
+ldap_server = dc01.yourdomain.com
+ldap_port = 389
+ldap_base_dn = DC=yourdomain,DC=com
+organizational_units = Workstations:OU=Workstations,OU=Computers,DC=yourdomain,DC=com | Servers:OU=Servers,OU=Computers,DC=yourdomain,DC=com | Laptops:OU=Laptops,OU=Computers,DC=yourdomain,DC=com
+```
 
 ## Troubleshooting
 
@@ -192,6 +324,38 @@ Edit `src/config.py` to customize:
 - Check network connectivity
 - Increase timeout in `src/config.py`
 - Verify hostname/IP address is correct
+
+### RDP Auto-Typer Not Working
+- Ensure credentials are set in Settings tab
+- Check that RDP window is focused before clicking auto-type buttons
+- Wait for 3-second countdown to complete
+- Verify target field accepts keyboard input
+
+### Active Directory Access Denied
+- Verify admin credentials are correct in Settings tab
+- Ensure your account has permissions for the operation:
+  - Computer deletion requires Delete permissions
+  - PC movement requires Write permissions
+  - User search does not require admin credentials
+- Check LDAP server configuration in `src/config.ini`
+- Verify LDAP server is reachable (port 389)
+
+### "No OUs configured"
+- Check `src/config.ini` exists and has [AD] section
+- Verify `organizational_units` line uses pipe (|) separator
+- Ensure LDAP DNs are correctly formatted
+- Example: `Test:OU=Test,DC=domain,DC=com | Prod:OU=Prod,DC=domain,DC=com`
+
+## Dependencies
+
+Key Python packages (see `requirements.txt` for versions):
+- **PySide6**: GUI framework
+- **pandas**: Data manipulation for Excel/CSV
+- **openpyxl**: Excel file reading
+- **pywin32**: Windows integration (Outlook COM)
+- **pyautogui**: Keyboard automation for RDP auto-typer
+- **ldap3**: Active Directory LDAP operations
+- **keyring**: Secure credential storage (legacy)
 
 ## Keyboard Shortcuts
 
