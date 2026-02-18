@@ -1,6 +1,7 @@
 """
 Ping Tab for Send Emails Manager - PySide6 Version
 """
+import pandas as pd
 from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
@@ -52,7 +53,31 @@ class PingTab(QWidget):
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
         
-        # Title
+        # === Single Ping Section ===
+        single_title = QLabel("Ping Single Host")
+        single_title.setObjectName("section-title")
+        main_layout.addWidget(single_title)
+        
+        # Single host input
+        single_layout = QHBoxLayout()
+        self.single_host_input = QLineEdit()
+        self.single_host_input.setPlaceholderText("Enter hostname or IP address (e.g., google.com or 8.8.8.8)")
+        single_layout.addWidget(self.single_host_input)
+        
+        single_ping_btn = QPushButton("Ping")
+        single_ping_btn.setMaximumWidth(120)
+        single_ping_btn.setMinimumHeight(32)
+        single_ping_btn.clicked.connect(self.ping_single_host)
+        single_layout.addWidget(single_ping_btn)
+        main_layout.addLayout(single_layout)
+        
+        # Separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        main_layout.addWidget(separator)
+        
+        # === Multiple Ping Section ===
         title = QLabel("Ping Multiple Hosts")
         title.setObjectName("section-title")
         main_layout.addWidget(title)
@@ -128,6 +153,55 @@ class PingTab(QWidget):
                 self.host_file_input.setText(file_path)
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to load file: {e}")
+
+    def ping_single_host(self):
+        """Ping a single host and add to results table"""
+        hostname = self.single_host_input.text().strip()
+        
+        if not hostname:
+            QMessageBox.warning(self, "Error", "Please enter a hostname or IP address")
+            return
+        
+        # Show progress
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(50)
+        
+        # Ping the host
+        try:
+            result = self.ping_manager.ping_host(hostname)
+            
+            # Add to results or create new results if none exist
+            if self.results_df is None or self.results_df.empty:
+                self.results_df = pd.DataFrame([result.to_dict()])
+            else:
+                # Add new result to existing dataframe
+                new_row = pd.DataFrame([result.to_dict()])
+                self.results_df = pd.concat([self.results_df, new_row], ignore_index=True)
+            
+            # Display updated results
+            self.display_results(self.results_df)
+            
+            # Update progress
+            self.progress_bar.setValue(100)
+            self.progress_bar.setVisible(False)
+            
+            # Show result message
+            if result.status == "Reachable":
+                QMessageBox.information(
+                    self, 
+                    "Ping Successful", 
+                    f"Host: {result.hostname}\nIP: {result.ip_address}\nStatus: {result.status}\nResponse Time: {result.response_time}"
+                )
+            else:
+                QMessageBox.warning(
+                    self, 
+                    "Ping Failed", 
+                    f"Host: {result.hostname}\nStatus: {result.status}"
+                )
+        
+        except Exception as e:
+            self.progress_bar.setVisible(False)
+            QMessageBox.warning(self, "Error", f"Failed to ping host: {e}")
 
     def start_pinging(self):
         """Start pinging hosts"""

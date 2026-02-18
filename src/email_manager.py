@@ -154,7 +154,6 @@ class EmailManager:
                             value = str(row[col]).strip()
                             token = f'{{{{{keyword}}}}}'
                             mail.HTMLBody = mail.HTMLBody.replace(token, value)
-                            mail.Body = mail.Body.replace(token, value)
                     
                     mail.To = email
                     if bcc_email:
