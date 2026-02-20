@@ -1,12 +1,16 @@
 """
-LDAP Manager - Active Directory operations using ldap3
+Active Directory Manager - AD operations via PowerShell ActiveDirectory module.
+
+Note:
+The class name remains LDAPManager to preserve compatibility with existing imports.
 """
-from ldap3 import Server, Connection, ALL, MODIFY_REPLACE
-from typing import Tuple, Optional, Dict, List
+import json
+import subprocess
+from typing import Tuple, Optional, Dict
 
 
 class LDAPManager:
-    """Manager for Active Directory LDAP operations"""
+    """Manager for Active Directory operations (PowerShell AD module backend)."""
     
     def __init__(self, server_address: str, server_port: int, base_dn: str, username: str, password: str):
         """
@@ -24,7 +28,68 @@ class LDAPManager:
         self.base_dn = base_dn
         self.username = username
         self.password = password
-        self.connection = None
+        self.connected = False
+
+    @staticmethod
+    def _escape_ps(value: str) -> str:
+        """Escape single quotes for PowerShell single-quoted strings."""
+        return (value or "").replace("'", "''")
+
+    def _credential_block(self) -> str:
+        """Build PowerShell credential block if username/password are provided."""
+        if self.username and self.password:
+            user = self._escape_ps(self.username)
+            pwd = self._escape_ps(self.password)
+            return (
+                f"$SecurePass = ConvertTo-SecureString '{pwd}' -AsPlainText -Force; "
+                f"$Cred = New-Object System.Management.Automation.PSCredential('{user}', $SecurePass); "
+            )
+        return "$Cred = $null; "
+
+    def _server_arg(self) -> str:
+        """Build optional -Server argument for AD cmdlets."""
+        if self.server_address:
+            return f"-Server '{self._escape_ps(self.server_address)}'"
+        return ""
+
+    def _search_base_arg(self) -> str:
+        """Build optional -SearchBase argument."""
+        if self.base_dn:
+            return f"-SearchBase '{self._escape_ps(self.base_dn)}'"
+        return ""
+
+    def _run_ps(self, script: str) -> Tuple[bool, str, str]:
+        """Run a PowerShell script and return (success, stdout, stderr)."""
+        try:
+            completed = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    script,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            ok = completed.returncode == 0
+            return ok, (completed.stdout or "").strip(), (completed.stderr or "").strip()
+        except Exception as e:
+            return False, "", str(e)
+
+    @staticmethod
+    def _format_error(error_text: str) -> str:
+        text = (error_text or "").strip()
+        lowered = text.lower()
+        if "access is denied" in lowered or "insufficient access" in lowered or "unauthorized" in lowered:
+            return "Access Denied: Your account does not have permission for this AD operation."
+        if "active directory module" in lowered or "import-module" in lowered:
+            return "ActiveDirectory PowerShell module is not available. Install RSAT AD tools."
+        if "cannot find an object" in lowered:
+            return "Object not found in Active Directory."
+        return text if text else "Unknown error while executing AD operation."
     
     def connect(self) -> bool:
         """
@@ -33,19 +98,25 @@ class LDAPManager:
         Returns:
             bool: True if connected successfully, False otherwise
         """
-        try:
-            server = Server(self.server_address, port=self.server_port, get_info=ALL)
-            self.connection = Connection(server, user=self.username, password=self.password)
-            return self.connection.bind()
-        except Exception as e:
-            print(f"LDAP Connection Error: {e}")
-            return False
+        credential_block = self._credential_block()
+        server_arg = self._server_arg()
+        script = (
+            "$ErrorActionPreference='Stop'; "
+            "Import-Module ActiveDirectory -ErrorAction Stop; "
+            f"{credential_block}"
+            "$testParams = @{}; "
+            f"if ('{self._escape_ps(self.server_address)}') {{ $testParams['Server'] = '{self._escape_ps(self.server_address)}' }}; "
+            "if ($Cred) { $testParams['Credential'] = $Cred }; "
+            "$null = Get-ADDomain @testParams; "
+            "Write-Output 'OK'"
+        )
+        ok, out, _ = self._run_ps(script)
+        self.connected = ok and out == "OK"
+        return self.connected
     
     def disconnect(self):
         """Close LDAP connection"""
-        if self.connection:
-            self.connection.unbind()
-            self.connection = None
+        self.connected = False
     
     def get_computer_info(self, hostname: str) -> Optional[Dict]:
         """
@@ -57,32 +128,42 @@ class LDAPManager:
         Returns:
             Dict with 'description' and 'ou' keys, or None if not found
         """
-        if not self.connection:
+        if not self.connected:
             if not self.connect():
                 return None
-        
+
+        host = self._escape_ps(hostname)
+        credential_block = self._credential_block()
+        server_arg = self._server_arg()
+        search_base_arg = self._search_base_arg()
+        script = (
+            "$ErrorActionPreference='Stop'; "
+            "Import-Module ActiveDirectory -ErrorAction Stop; "
+            f"{credential_block}"
+            "$params = @{ Filter = \"Name -eq '" + host + "'\"; Properties = @('Description','DistinguishedName') }; "
+            f"if ('{self._escape_ps(self.server_address)}') {{ $params['Server'] = '{self._escape_ps(self.server_address)}' }}; "
+            f"if ('{self._escape_ps(self.base_dn)}') {{ $params['SearchBase'] = '{self._escape_ps(self.base_dn)}' }}; "
+            "if ($Cred) { $params['Credential'] = $Cred }; "
+            "$comp = Get-ADComputer @params | Select-Object -First 1 Name,Description,DistinguishedName; "
+            "if (-not $comp) { Write-Output '{}' ; exit 0 }; "
+            "$comp | ConvertTo-Json -Compress"
+        )
+        ok, out, _ = self._run_ps(script)
+        if not ok or not out:
+            return None
+
         try:
-            # Search for computer by name
-            search_filter = f"(&(objectClass=computer)(cn={hostname}))"
-            self.connection.search(self.base_dn, search_filter, attributes=['description', 'distinguishedName'])
-            
-            if not self.connection.entries:
+            data = json.loads(out)
+            if not data:
                 return None
-            
-            entry = self.connection.entries[0]
-            description = entry.description.value if hasattr(entry, 'description') and entry.description else "No description"
-            dn = entry.distinguishedName.value
-            
-            # Extract OU from DN (everything except the CN part)
+            dn = str(data.get("DistinguishedName", ""))
             ou = dn.split(',', 1)[1] if ',' in dn else "Unknown OU"
-            
             return {
-                'description': str(description),
+                'description': str(data.get('Description') or "No description"),
                 'ou': str(ou),
-                'dn': str(dn)
+                'dn': dn,
             }
-        except Exception as e:
-            print(f"Error getting computer info: {e}")
+        except Exception:
             return None
     
     def delete_computer(self, hostname: str) -> Tuple[bool, str]:
@@ -95,39 +176,35 @@ class LDAPManager:
         Returns:
             Tuple of (success: bool, message: str)
         """
-        if not self.connection:
+        if not self.connected:
             if not self.connect():
-                return False, "Failed to connect to LDAP server"
-        
-        try:
-            # Get full DN by searching for the computer
-            search_filter = f"(&(objectClass=computer)(cn={hostname}))"
-            self.connection.search(self.base_dn, search_filter, attributes=['distinguishedName'])
-            
-            if not self.connection.entries:
-                return False, f"Computer '{hostname}' not found in AD"
-            
-            dn = self.connection.entries[0].distinguishedName.value
-            
-            # Delete the computer object
-            self.connection.delete(dn)
-            
-            if self.connection.result['result'] == 0:
-                return True, f"Computer '{hostname}' successfully deleted from AD"
-            elif self.connection.result['result'] == 49:
-                # LDAP error 49 means invalid credentials or access denied
-                return False, "Access Denied: Your admin account does not have permission to delete computers in AD. Contact your domain administrator."
-            elif self.connection.result['result'] in [12, 1]:
-                # LDAP errors for insufficient access rights
-                return False, "Access Denied: Your admin account does not have sufficient permissions to delete this computer object."
-            else:
-                return False, f"Failed to delete: {self.connection.result['message']}"
-        
-        except Exception as e:
-            error_msg = str(e).lower()
-            if 'insufficient access' in error_msg or '0x80070005' in error_msg:
-                return False, "Access Denied: Your admin account does not have permission to delete computers in AD."
-            return False, f"Error deleting computer: {str(e)}"
+                return False, "Failed to connect to AD server"
+
+        host = self._escape_ps(hostname)
+        credential_block = self._credential_block()
+        script = (
+            "$ErrorActionPreference='Stop'; "
+            "Import-Module ActiveDirectory -ErrorAction Stop; "
+            f"{credential_block}"
+            "$params = @{ Filter = \"Name -eq '" + host + "'\" }; "
+            f"if ('{self._escape_ps(self.server_address)}') {{ $params['Server'] = '{self._escape_ps(self.server_address)}' }}; "
+            f"if ('{self._escape_ps(self.base_dn)}') {{ $params['SearchBase'] = '{self._escape_ps(self.base_dn)}' }}; "
+            "if ($Cred) { $params['Credential'] = $Cred }; "
+            "$comp = Get-ADComputer @params | Select-Object -First 1 DistinguishedName; "
+            "if (-not $comp) { throw \"Computer not found\" }; "
+            "$removeParams = @{ Identity = $comp.DistinguishedName; Confirm = $false }; "
+            f"if ('{self._escape_ps(self.server_address)}') {{ $removeParams['Server'] = '{self._escape_ps(self.server_address)}' }}; "
+            "if ($Cred) { $removeParams['Credential'] = $Cred }; "
+            "Remove-ADComputer @removeParams; "
+            "Write-Output 'OK'"
+        )
+        ok, out, err = self._run_ps(script)
+        if ok and out == "OK":
+            return True, f"Computer '{hostname}' successfully deleted from AD"
+
+        if "Computer not found" in err:
+            return False, f"Computer '{hostname}' not found in AD"
+        return False, self._format_error(err)
     
     def move_computer(self, hostname: str, target_ou: str) -> Tuple[bool, str]:
         """
@@ -140,40 +217,130 @@ class LDAPManager:
         Returns:
             Tuple of (success: bool, message: str)
         """
-        if not self.connection:
+        if not self.connected:
             if not self.connect():
-                return False, "Failed to connect to LDAP server"
-        
+                return False, "Failed to connect to AD server"
+
+        host = self._escape_ps(hostname)
+        target = self._escape_ps(target_ou)
+        credential_block = self._credential_block()
+        script = (
+            "$ErrorActionPreference='Stop'; "
+            "Import-Module ActiveDirectory -ErrorAction Stop; "
+            f"{credential_block}"
+            "$params = @{ Filter = \"Name -eq '" + host + "'\" }; "
+            f"if ('{self._escape_ps(self.server_address)}') {{ $params['Server'] = '{self._escape_ps(self.server_address)}' }}; "
+            f"if ('{self._escape_ps(self.base_dn)}') {{ $params['SearchBase'] = '{self._escape_ps(self.base_dn)}' }}; "
+            "if ($Cred) { $params['Credential'] = $Cred }; "
+            "$comp = Get-ADComputer @params | Select-Object -First 1 DistinguishedName; "
+            "if (-not $comp) { throw \"Computer not found\" }; "
+            "$moveParams = @{ Identity = $comp.DistinguishedName; TargetPath = '" + target + "' }; "
+            f"if ('{self._escape_ps(self.server_address)}') {{ $moveParams['Server'] = '{self._escape_ps(self.server_address)}' }}; "
+            "if ($Cred) { $moveParams['Credential'] = $Cred }; "
+            "Move-ADObject @moveParams; "
+            "Write-Output 'OK'"
+        )
+        ok, out, err = self._run_ps(script)
+        if ok and out == "OK":
+            return True, f"Computer '{hostname}' successfully moved to {target_ou}"
+
+        if "Computer not found" in err:
+            return False, f"Computer '{hostname}' not found in AD"
+        return False, self._format_error(err)
+
+    def update_computer_description(self, hostname: str, description: str) -> Tuple[bool, str]:
+        """
+        Update a computer object's Description in AD.
+
+        Args:
+            hostname: Computer hostname
+            description: New description (empty string clears value)
+
+        Returns:
+            Tuple of (success, message)
+        """
+        if not self.connected:
+            if not self.connect():
+                return False, "Failed to connect to AD server"
+
+        host = self._escape_ps(hostname)
+        desc = self._escape_ps(description)
+        credential_block = self._credential_block()
+        script = (
+            "$ErrorActionPreference='Stop'; "
+            "Import-Module ActiveDirectory -ErrorAction Stop; "
+            f"{credential_block}"
+            "$params = @{ Filter = \"Name -eq '" + host + "'\" }; "
+            f"if ('{self._escape_ps(self.server_address)}') {{ $params['Server'] = '{self._escape_ps(self.server_address)}' }}; "
+            f"if ('{self._escape_ps(self.base_dn)}') {{ $params['SearchBase'] = '{self._escape_ps(self.base_dn)}' }}; "
+            "if ($Cred) { $params['Credential'] = $Cred }; "
+            "$comp = Get-ADComputer @params | Select-Object -First 1 DistinguishedName; "
+            "if (-not $comp) { throw \"Computer not found\" }; "
+            "$setParams = @{ Identity = $comp.DistinguishedName }; "
+            f"if ('{self._escape_ps(self.server_address)}') {{ $setParams['Server'] = '{self._escape_ps(self.server_address)}' }}; "
+            "if ($Cred) { $setParams['Credential'] = $Cred }; "
+            "if ('" + desc + "' -eq '') { $setParams['Clear'] = @('Description') } else { $setParams['Description'] = '" + desc + "' }; "
+            "Set-ADComputer @setParams; "
+            "Write-Output 'OK'"
+        )
+        ok, out, err = self._run_ps(script)
+        if ok and out == "OK":
+            return True, f"Computer '{hostname}' description updated successfully"
+        if "Computer not found" in err:
+            return False, f"Computer '{hostname}' not found in AD"
+        return False, self._format_error(err)
+
+    def search_users(self, search_term: str):
+        """
+        Search for all users matching name/userid fragments.
+
+        Args:
+            search_term: name or userid fragment
+
+        Returns:
+            list[dict]: matching users
+        """
+        if not self.connected:
+            if not self.connect():
+                return []
+
+        term = self._escape_ps(search_term)
+        credential_block = self._credential_block()
+        script = (
+            "$ErrorActionPreference='Stop'; "
+            "Import-Module ActiveDirectory -ErrorAction Stop; "
+            f"{credential_block}"
+            "$filter = \"SamAccountName -like '*" + term + "*' -or UserPrincipalName -like '*" + term + "*' -or Name -like '*" + term + "*' -or DisplayName -like '*" + term + "*'\"; "
+            "$params = @{ Filter = $filter; Properties = @('DisplayName','SamAccountName','DistinguishedName') }; "
+            f"if ('{self._escape_ps(self.server_address)}') {{ $params['Server'] = '{self._escape_ps(self.server_address)}' }}; "
+            f"if ('{self._escape_ps(self.base_dn)}') {{ $params['SearchBase'] = '{self._escape_ps(self.base_dn)}' }}; "
+            "if ($Cred) { $params['Credential'] = $Cred }; "
+            "$users = Get-ADUser @params | Sort-Object Name | Select-Object DisplayName,SamAccountName,DistinguishedName; "
+            "if (-not $users) { Write-Output '[]'; exit 0 }; "
+            "$users | ConvertTo-Json -Compress"
+        )
+        ok, out, _ = self._run_ps(script)
+        if not ok or not out:
+            return []
+
         try:
-            # Get the current DN of the computer
-            search_filter = f"(&(objectClass=computer)(cn={hostname}))"
-            self.connection.search(self.base_dn, search_filter, attributes=['distinguishedName'])
-            
-            if not self.connection.entries:
-                return False, f"Computer '{hostname}' not found in AD"
-            
-            current_dn = self.connection.entries[0].distinguishedName.value
-            rdn = f"CN={hostname}"
-            
-            # Move the computer (modify_dn operation)
-            self.connection.modify_dn(current_dn, rdn, new_superior=target_ou)
-            
-            if self.connection.result['result'] == 0:
-                return True, f"Computer '{hostname}' successfully moved to {target_ou}"
-            elif self.connection.result['result'] == 49:
-                # LDAP error 49 means invalid credentials or access denied
-                return False, "Access Denied: Your admin account does not have permission to move computers in AD. Contact your domain administrator."
-            elif self.connection.result['result'] in [12, 1]:
-                # LDAP errors for insufficient access rights
-                return False, "Access Denied: Your admin account does not have sufficient permissions to move this computer object."
-            else:
-                return False, f"Failed to move: {self.connection.result['message']}"
-        
-        except Exception as e:
-            error_msg = str(e).lower()
-            if 'insufficient access' in error_msg or '0x80070005' in error_msg:
-                return False, "Access Denied: Your admin account does not have permission to move computers in AD."
-            return False, f"Error moving computer: {str(e)}"
+            data = json.loads(out)
+            if isinstance(data, dict):
+                data = [data]
+            results = []
+            for entry in data:
+                dn = str(entry.get("DistinguishedName", ""))
+                ou_ldap = dn.split(',', 1)[1] if ',' in dn else "Unknown OU"
+                results.append({
+                    'displayName': str(entry.get('DisplayName') or "N/A"),
+                    'sAMAccountName': str(entry.get('SamAccountName') or "N/A"),
+                    'ou_ldap': str(ou_ldap),
+                    'ou_windows': str(self._dn_to_windows_path(dn)),
+                    'dn': dn,
+                })
+            return results
+        except Exception:
+            return []
     
     def search_user(self, search_term: str) -> Optional[Dict]:
         """
@@ -185,35 +352,8 @@ class LDAPManager:
         Returns:
             Dict with user info including OU in both LDAP and Windows formats
         """
-        try:
-            # Try searching by display name OR sAMAccountName - handles both name and userid
-            search_filter = f"(&(objectClass=user)(|(displayName=*{search_term}*)(sAMAccountName={search_term})))"
-            self.connection.search(self.base_dn, search_filter, attributes=['displayName', 'sAMAccountName', 'distinguishedName'])
-            
-            if not self.connection.entries:
-                return None
-            
-            entry = self.connection.entries[0]
-            dn = entry.distinguishedName.value
-            display_name = entry.displayName.value if hasattr(entry, 'displayName') and entry.displayName else "N/A"
-            sam_account = entry.sAMAccountName.value if hasattr(entry, 'sAMAccountName') and entry.sAMAccountName else "N/A"
-            
-            # Extract OU from DN (LDAP format)
-            ou_ldap = dn.split(',', 1)[1] if ',' in dn else "Unknown OU"
-            
-            # Convert DN to Windows-style path
-            ou_windows = self._dn_to_windows_path(dn)
-            
-            return {
-                'displayName': str(display_name),
-                'sAMAccountName': str(sam_account),
-                'ou_ldap': str(ou_ldap),
-                'ou_windows': str(ou_windows),
-                'dn': str(dn)
-            }
-        except Exception as e:
-            print(f"Error searching user: {e}")
-            return None
+        users = self.search_users(search_term)
+        return users[0] if users else None
     
     def _dn_to_windows_path(self, dn: str) -> str:
         r"""

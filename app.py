@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QLabel, QPushButton, QFrame
 )
-from PySide6.QtGui import QFont, QIcon, QPixmap
+from PySide6.QtGui import QFont, QIcon, QPixmap, QAction
 from PySide6.QtCore import Qt, QTimer
 
 # Add src to path
@@ -59,8 +59,16 @@ class SendEmailsManager(QMainWindow):
         
         # Create UI
         self.create_ui()
+        self.create_menu_bar()
         log_info("Application UI created successfully")
 
+    def create_menu_bar(self):
+        """Create top menu bar actions."""
+        connection_menu = self.menuBar().addMenu("Connection")
+
+        test_ad_action = QAction("Test AD Connection", self)
+        test_ad_action.triggered.connect(self.test_ad_connection)
+        connection_menu.addAction(test_ad_action)
     def apply_stylesheet(self):
         """Apply professional red/dark theme stylesheet"""
         style = """
@@ -278,8 +286,8 @@ class SendEmailsManager(QMainWindow):
         tabs.setObjectName("mainTabs")
         
         # Settings tab (first - for credentials)
-        settings_tab = SettingsTab()
-        tabs.addTab(settings_tab, "Settings")
+        self.settings_tab = SettingsTab()
+        tabs.addTab(self.settings_tab, "⚙️ Settings")
         
         # Email tab
         email_tab = EmailTab()
@@ -290,12 +298,12 @@ class SendEmailsManager(QMainWindow):
         tabs.addTab(ping_tab, "Ping Hosts")
         
         # AD tab (pass settings_tab reference)
-        ad_tab = ADTab(settings_tab)
-        tabs.addTab(ad_tab, "AD")
+        self.ad_tab = ADTab(self.settings_tab)
+        tabs.addTab(self.ad_tab, "AD")
         
         # RDP tab (pass settings_tab reference)
-        rdp_tab = RDPTab(settings_tab)
-        tabs.addTab(rdp_tab, "RDP")
+        self.rdp_tab = RDPTab(self.settings_tab)
+        tabs.addTab(self.rdp_tab, "RDP")
         
         main_layout.addWidget(tabs, 1)
         
@@ -304,6 +312,14 @@ class SendEmailsManager(QMainWindow):
         main_layout.addWidget(footer)
         
         central_widget.setLayout(main_layout)
+
+    def test_ad_connection(self):
+        """Run AD connection test from menu action."""
+        if hasattr(self, 'ad_tab') and self.ad_tab:
+            self.ad_tab.test_ad_connection(show_dialog=True)
+        else:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "AD Connection Test", "AD tab is not initialized.")
 
     def create_header(self):
         """Create header frame with title and description"""
@@ -371,7 +387,7 @@ class SendEmailsManager(QMainWindow):
         
         about_text = f"""{APP_TITLE}
 
-Version: 2.0
+Version: 2.1
 Created by: Jack Whatley
 
 Description:
@@ -397,7 +413,8 @@ Features:
 • Computer deletion with safety confirmations
 • PC movement (single and bulk) between OUs
 • User search by name or ID with Windows-style OU paths
-• Full LDAP integration with permission handling
+• Set PC Description field with custom text
+• Uses Powershell for all AD operations with robust error handling
 
 🔐 Security
 • In-memory credential storage (no disk persistence)
