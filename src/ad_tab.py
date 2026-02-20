@@ -2,6 +2,8 @@
 Active Directory Tab - PC Management, Movement, and User Search
 """
 import configparser
+import csv
+from datetime import datetime
 from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, 
@@ -44,6 +46,47 @@ class ADTab(QWidget):
                 ou_dict[friendly_name.strip()] = ou_dn.strip()
         
         return ou_dict
+
+    def _get_ad_log_file_path(self):
+        """Resolve AD audit log file path from config (default: logs/ad_audit.csv)."""
+        log_folder_setting = self.ldap_config.get('log_folder', 'logs').strip() or 'logs'
+        folder_path = Path(log_folder_setting)
+        if not folder_path.is_absolute():
+            folder_path = Path(__file__).parent.parent / folder_path
+        folder_path.mkdir(parents=True, exist_ok=True)
+        return folder_path / "ad_audit.csv"
+
+    def _write_ad_audit_log(self, action, hostname, status, message, target_ou=''):
+        """Write AD action audit entry (delete/move/description only)."""
+        try:
+            username, _ = self.get_credentials()
+            actor = username if username else "unknown"
+            log_file = self._get_ad_log_file_path()
+            file_exists = log_file.exists()
+
+            with open(log_file, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow([
+                        "timestamp",
+                        "actor",
+                        "action",
+                        "hostname",
+                        "target_ou",
+                        "status",
+                        "message",
+                    ])
+                writer.writerow([
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    actor,
+                    action,
+                    hostname,
+                    target_ou,
+                    status,
+                    message,
+                ])
+        except Exception:
+            pass
 
     def setup_ui(self):
         """Create the AD tab UI"""
@@ -172,6 +215,53 @@ class ADTab(QWidget):
         separator2.setFrameShape(QFrame.HLine)
         separator2.setFrameShadow(QFrame.Sunken)
         main_layout.addWidget(separator2)
+
+        # ===== EDIT DESCRIPTION SECTION =====
+        desc_title = QLabel("Edit Computer Description")
+        desc_title.setObjectName("section-title")
+        desc_title.setStyleSheet("color: #f39c12;")
+        main_layout.addWidget(desc_title)
+
+        desc_container = QFrame()
+        desc_layout = QVBoxLayout()
+        desc_layout.setContentsMargins(0, 0, 0, 0)
+        desc_layout.setSpacing(8)
+
+        desc_info = QLabel("Requires admin credentials from Settings tab")
+        desc_info.setStyleSheet("color: #999999; font-size: 10px;")
+        desc_layout.addWidget(desc_info)
+
+        desc_row1 = QHBoxLayout()
+        self.desc_hostname = QLineEdit()
+        self.desc_hostname.setPlaceholderText("Hostname (e.g., COMPUTER-01)")
+        desc_row1.addWidget(self.desc_hostname)
+        desc_layout.addLayout(desc_row1)
+
+        desc_row2 = QHBoxLayout()
+        self.desc_value = QLineEdit()
+        self.desc_value.setPlaceholderText("New description (leave blank to clear)")
+        desc_row2.addWidget(self.desc_value)
+
+        desc_update_btn = QPushButton("Update Description")
+        desc_update_btn.setMinimumHeight(32)
+        desc_update_btn.setMaximumWidth(170)
+        desc_update_btn.clicked.connect(self.update_pc_description)
+        desc_row2.addWidget(desc_update_btn)
+        desc_layout.addLayout(desc_row2)
+
+        self.description_status = QLabel("")
+        self.description_status.setStyleSheet("font-size: 10px; color: #888888;")
+        self.description_status.setWordWrap(True)
+        desc_layout.addWidget(self.description_status)
+
+        desc_container.setLayout(desc_layout)
+        main_layout.addWidget(desc_container)
+
+        # Separator
+        separator3 = QFrame()
+        separator3.setFrameShape(QFrame.HLine)
+        separator3.setFrameShadow(QFrame.Sunken)
+        main_layout.addWidget(separator3)
         
         # ===== USER SEARCH SECTION =====
         user_title = QLabel("Search User Account")
@@ -184,7 +274,7 @@ class ADTab(QWidget):
         user_layout.setContentsMargins(0, 0, 0, 0)
         user_layout.setSpacing(8)
         
-        info_label = QLabel("Enter a full name or user ID - searches both fields automatically")
+        info_label = QLabel("Enter full or partial name/user ID (e.g., Jack) to list all matches")
         info_label.setStyleSheet("color: #999999; font-size: 10px;")
         user_layout.addWidget(info_label)
         
@@ -222,6 +312,38 @@ class ADTab(QWidget):
         
         main_layout.addStretch()
         self.setLayout(main_layout)
+
+    def test_ad_connection(self, show_dialog=True):
+        """Test AD connectivity using configured server/base DN and optional credentials."""
+        username, password = self.get_credentials()
+
+        manager = LDAPManager(
+            self.ldap_config.get('ldap_server', 'localhost'),
+            int(self.ldap_config.get('ldap_port', '389')),
+            self.ldap_config.get('ldap_base_dn', ''),
+            username or '',
+            password or ''
+        )
+
+        ok = manager.connect()
+        manager.disconnect()
+
+        if show_dialog:
+            if ok:
+                auth_mode = "configured admin credentials" if username and password else "current Windows credentials"
+                QMessageBox.information(
+                    self,
+                    "AD Connection Test",
+                    f"✅ AD connection successful using {auth_mode}."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "AD Connection Test",
+                    "❌ AD connection failed.\n\nCheck Settings credentials and src/config.ini AD values."
+                )
+
+        return ok
     
     def get_credentials(self):
         """Get credentials from settings tab"""
@@ -235,12 +357,14 @@ class ADTab(QWidget):
         if not hostname:
             self.delete_status.setText("❌ Please enter a hostname")
             self.delete_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("DELETE", "", "FAILED", "Hostname missing")
             return
         
         username, password = self.get_credentials()
         if not username or not password:
             QMessageBox.warning(self, "Credentials Required", 
                 "Please set admin credentials in Settings tab first.")
+            self._write_ad_audit_log("DELETE", hostname, "FAILED", "Missing admin credentials")
             return
         
         # Initialize LDAP manager
@@ -256,6 +380,7 @@ class ADTab(QWidget):
         if not self.ldap_manager.connect():
             self.delete_status.setText("❌ Failed to connect to AD")
             self.delete_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("DELETE", hostname, "FAILED", "Failed to connect to AD")
             return
         
         pc_info = self.ldap_manager.get_computer_info(hostname)
@@ -264,6 +389,7 @@ class ADTab(QWidget):
         if not pc_info:
             self.delete_status.setText(f"❌ Computer '{hostname}' not found in AD")
             self.delete_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("DELETE", hostname, "FAILED", "Computer not found in AD")
             return
         
         # Show confirmation with PC details
@@ -292,6 +418,7 @@ class ADTab(QWidget):
             if not self.ldap_manager.connect():
                 self.delete_status.setText("❌ Failed to connect to AD for deletion")
                 self.delete_status.setStyleSheet("font-size: 9px; color: #f44336;")
+                self._write_ad_audit_log("DELETE", hostname, "FAILED", "Failed to connect for deletion")
                 return
             
             success, message = self.ldap_manager.delete_computer(hostname)
@@ -301,9 +428,11 @@ class ADTab(QWidget):
                 self.delete_status.setText(f"✅ {message}")
                 self.delete_status.setStyleSheet("font-size: 9px; color: #4CAF50;")
                 self.delete_hostname.clear()
+                self._write_ad_audit_log("DELETE", hostname, "SUCCESS", message)
             else:
                 self.delete_status.setText(f"❌ {message}")
                 self.delete_status.setStyleSheet("font-size: 9px; color: #f44336;")
+                self._write_ad_audit_log("DELETE", hostname, "FAILED", message)
     
     def move_pc(self):
         """Move a single PC to an OU"""
@@ -313,11 +442,13 @@ class ADTab(QWidget):
         if not hostname:
             self.move_status.setText("❌ Please enter a hostname")
             self.move_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("MOVE", "", "FAILED", "Hostname missing")
             return
         
         if not self.ou_list or friendly_name not in self.ou_list:
             self.move_status.setText("❌ Invalid OU selected")
             self.move_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("MOVE", hostname, "FAILED", "Invalid OU selected", friendly_name)
             return
         
         target_ou = self.ou_list[friendly_name]
@@ -326,6 +457,7 @@ class ADTab(QWidget):
         if not username or not password:
             QMessageBox.warning(self, "Credentials Required",
                 "Please set admin credentials in Settings tab first.")
+            self._write_ad_audit_log("MOVE", hostname, "FAILED", "Missing admin credentials", friendly_name)
             return
         
         reply = QMessageBox.information(self, "Confirm Move",
@@ -344,6 +476,7 @@ class ADTab(QWidget):
             if not self.ldap_manager.connect():
                 self.move_status.setText("❌ Failed to connect to AD")
                 self.move_status.setStyleSheet("font-size: 9px; color: #f44336;")
+                self._write_ad_audit_log("MOVE", hostname, "FAILED", "Failed to connect to AD", friendly_name)
                 return
             
             success, message = self.ldap_manager.move_computer(hostname, target_ou)
@@ -353,9 +486,11 @@ class ADTab(QWidget):
                 self.move_status.setText(f"✅ {message}")
                 self.move_status.setStyleSheet("font-size: 9px; color: #4CAF50;")
                 self.move_hostname.clear()
+                self._write_ad_audit_log("MOVE", hostname, "SUCCESS", message, friendly_name)
             else:
                 self.move_status.setText(f"❌ {message}")
                 self.move_status.setStyleSheet("font-size: 9px; color: #f44336;")
+                self._write_ad_audit_log("MOVE", hostname, "FAILED", message, friendly_name)
     
     def browse_excel(self):
         """Browse and select Excel file"""
@@ -372,11 +507,13 @@ class ADTab(QWidget):
         if not file_path:
             self.move_status.setText("❌ Please select an Excel file")
             self.move_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("BULK_MOVE", "", "FAILED", "No Excel file selected")
             return
         
         if not self.ou_list or friendly_name not in self.ou_list:
             self.move_status.setText("❌ Invalid OU selected")
             self.move_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("BULK_MOVE", "", "FAILED", "Invalid OU selected", friendly_name)
             return
         
         target_ou = self.ou_list[friendly_name]
@@ -385,6 +522,7 @@ class ADTab(QWidget):
         if not username or not password:
             QMessageBox.warning(self, "Credentials Required",
                 "Please set admin credentials in Settings tab first.")
+            self._write_ad_audit_log("BULK_MOVE", "", "FAILED", "Missing admin credentials", friendly_name)
             return
         
         try:
@@ -395,6 +533,7 @@ class ADTab(QWidget):
             if not hostnames:
                 self.move_status.setText("❌ No hostnames found in Excel file")
                 self.move_status.setStyleSheet("font-size: 9px; color: #f44336;")
+                self._write_ad_audit_log("BULK_MOVE", "", "FAILED", "No hostnames found in Excel", friendly_name)
                 return
             
             hostname_list = ", ".join(hostnames[:10]) + ("..." if len(hostnames) > 10 else "")
@@ -414,24 +553,82 @@ class ADTab(QWidget):
                 if not self.ldap_manager.connect():
                     self.move_status.setText("❌ Failed to connect to AD")
                     self.move_status.setStyleSheet("font-size: 9px; color: #f44336;")
+                    self._write_ad_audit_log("BULK_MOVE", "", "FAILED", "Failed to connect to AD", friendly_name)
                     return
                 
                 # Move each computer
                 success_count = 0
                 for hostname in hostnames:
-                    success, _ = self.ldap_manager.move_computer(hostname, target_ou)
+                    success, msg = self.ldap_manager.move_computer(hostname, target_ou)
                     if success:
                         success_count += 1
+                        self._write_ad_audit_log("MOVE", hostname, "SUCCESS", msg, friendly_name)
+                    else:
+                        self._write_ad_audit_log("MOVE", hostname, "FAILED", msg, friendly_name)
                 
                 self.ldap_manager.disconnect()
                 
                 self.move_status.setText(f"✅ Bulk move complete: {success_count}/{len(hostnames)} computers moved to {friendly_name}")
                 self.move_status.setStyleSheet("font-size: 9px; color: #4CAF50;")
                 self.bulk_file_label.clear()
+                self._write_ad_audit_log(
+                    "BULK_MOVE",
+                    "",
+                    "SUCCESS" if success_count == len(hostnames) else "PARTIAL",
+                    f"Bulk move complete: {success_count}/{len(hostnames)}",
+                    friendly_name
+                )
         
         except Exception as e:
             self.move_status.setText(f"❌ Error reading file: {str(e)}")
             self.move_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("BULK_MOVE", "", "FAILED", f"Error reading file: {str(e)}", friendly_name)
+
+    def update_pc_description(self):
+        """Update a computer object's description in AD (admin required)."""
+        hostname = self.desc_hostname.text().strip()
+        description = self.desc_value.text().strip()
+
+        if not hostname:
+            self.description_status.setText("❌ Please enter a hostname")
+            self.description_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("UPDATE_DESCRIPTION", "", "FAILED", "Hostname missing")
+            return
+
+        username, password = self.get_credentials()
+        if not username or not password:
+            QMessageBox.warning(self, "Credentials Required",
+                "Please set admin credentials in Settings tab first.")
+            self._write_ad_audit_log("UPDATE_DESCRIPTION", hostname, "FAILED", "Missing admin credentials")
+            return
+
+        self.ldap_manager = LDAPManager(
+            self.ldap_config.get('ldap_server', 'localhost'),
+            int(self.ldap_config.get('ldap_port', '389')),
+            self.ldap_config.get('ldap_base_dn', ''),
+            username,
+            password
+        )
+
+        if not self.ldap_manager.connect():
+            self.description_status.setText("❌ Failed to connect to AD")
+            self.description_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("UPDATE_DESCRIPTION", hostname, "FAILED", "Failed to connect to AD")
+            return
+
+        success, message = self.ldap_manager.update_computer_description(hostname, description)
+        self.ldap_manager.disconnect()
+
+        if success:
+            self.description_status.setText(f"✅ {message}")
+            self.description_status.setStyleSheet("font-size: 9px; color: #4CAF50;")
+            self.desc_hostname.clear()
+            self.desc_value.clear()
+            self._write_ad_audit_log("UPDATE_DESCRIPTION", hostname, "SUCCESS", message)
+        else:
+            self.description_status.setText(f"❌ {message}")
+            self.description_status.setStyleSheet("font-size: 9px; color: #f44336;")
+            self._write_ad_audit_log("UPDATE_DESCRIPTION", hostname, "FAILED", message)
     
     def search_user(self):
         """Search for user's OU"""
@@ -455,26 +652,24 @@ class ADTab(QWidget):
             if not self.ldap_manager.connect():
                 self.user_result.setText("❌ Failed to connect to AD server")
                 return
-            
-            user_info = self.ldap_manager.search_user(search_term)
+
+            users = self.ldap_manager.search_users(search_term)
             self.ldap_manager.disconnect()
-            
-            if not user_info:
-                self.user_result.setText(f"❌ User '{search_term}' not found in AD\n\nTip: Search accepts both full name and user ID (searches both fields)")
+
+            if not users:
+                self.user_result.setText(f"❌ No users found for '{search_term}'\n\nTip: Try partial search like first name, last name, or userid fragment")
                 return
-            
-            # Format results with Windows-style path prominently displayed
-            result_text = (
-                f"Display Name: {user_info['displayName']}\n"
-                f"User ID: {user_info['sAMAccountName']}\n"
-                f"\n"
-                f"OU (Windows Path):\n"
-                f"{user_info['ou_windows']}\n"
-                f"\n"
-                f"[Easy Copy: Highlight and Ctrl+C above]"
-            )
-            self.user_result.setText(result_text)
+
+            lines = [f"Found {len(users)} user(s):", ""]
+            for i, user_info in enumerate(users, start=1):
+                lines.append(f"[{i}] Display Name: {user_info['displayName']}")
+                lines.append(f"    User ID: {user_info['sAMAccountName']}")
+                lines.append(f"    OU: {user_info['ou_windows']}")
+                lines.append("")
+
+            lines.append("[Easy Copy: Highlight and Ctrl+C above]")
+            self.user_result.setText("\n".join(lines))
             self.user_search.clear()
-        
+
         except Exception as e:
             self.user_result.setText(f"❌ Error searching user: {str(e)}")

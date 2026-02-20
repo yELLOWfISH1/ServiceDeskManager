@@ -1,4 +1,4 @@
-# Service Desk Manager v2.0
+# Service Desk Manager v2.1
 
 A comprehensive service desk automation tool for managing email campaigns, network diagnostics, RDP session management, and Active Directory operations.
 
@@ -44,8 +44,8 @@ A comprehensive service desk automation tool for managing email campaigns, netwo
   - Searches both displayName and sAMAccountName
   - Displays Windows-style OU path (e.g., domain.com\IT\Users)
   - Does not require admin credentials
-- **LDAP Integration**: Full Active Directory integration with error handling
-  - Connection management with configurable LDAP server
+- **PowerShell AD Integration**: Uses the ActiveDirectory PowerShell module for faster AD operations
+   - Connection management with configurable AD server/base DN settings
   - Permission error detection and user-friendly messages
   - DN to Windows path conversion for readability
 
@@ -175,6 +175,7 @@ A comprehensive service desk automation tool for managing email campaigns, netwo
 - Python 3.8+
 - Microsoft Outlook (for email functionality)
 - Excel or CSV files for data
+- Active Directory PowerShell module installed (RSAT AD tools)
 - LDAP/Active Directory access (for AD operations)
 
 ### Setup
@@ -354,7 +355,7 @@ Key Python packages (see `requirements.txt` for versions):
 - **openpyxl**: Excel file reading
 - **pywin32**: Windows integration (Outlook COM)
 - **pyautogui**: Keyboard automation for RDP auto-typer
-- **ldap3**: Active Directory LDAP operations
+- **PowerShell ActiveDirectory module**: Active Directory operations backend
 - **keyring**: Secure credential storage (legacy)
 
 ## Keyboard Shortcuts
