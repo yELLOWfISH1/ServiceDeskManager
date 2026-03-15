@@ -29,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from src.config import APP_TITLE, APP_WIDTH, APP_HEIGHT, OUTPUT_DIR
 from src.email_tab import EmailTab
 from src.ping_tab import PingTab
-from src.settings_tab import SettingsTab
 from src.ad_tab import ADTab
 from src.rdp_tab import RDPTab
 from src.logger import log_info, log_error
@@ -285,10 +284,6 @@ class SendEmailsManager(QMainWindow):
         tabs = QTabWidget()
         tabs.setObjectName("mainTabs")
         
-        # Settings tab (first - for credentials)
-        self.settings_tab = SettingsTab()
-        tabs.addTab(self.settings_tab, "⚙️ Settings")
-        
         # Email tab
         email_tab = EmailTab()
         tabs.addTab(email_tab, "Send Emails")
@@ -297,12 +292,12 @@ class SendEmailsManager(QMainWindow):
         ping_tab = PingTab()
         tabs.addTab(ping_tab, "Ping Hosts")
         
-        # AD tab (pass settings_tab reference)
-        self.ad_tab = ADTab(self.settings_tab)
+        # AD tab
+        self.ad_tab = ADTab()
         tabs.addTab(self.ad_tab, "AD")
         
-        # RDP tab (pass settings_tab reference)
-        self.rdp_tab = RDPTab(self.settings_tab)
+        # RDP tab
+        self.rdp_tab = RDPTab()
         tabs.addTab(self.rdp_tab, "RDP")
         
         main_layout.addWidget(tabs, 1)
@@ -391,35 +386,18 @@ Version: 2.1
 Created by: Jack Whatley
 
 Description:
-Service Desk Manager is a comprehensive automation tool for service desk operations. It combines email management, network diagnostics, RDP session management, and Active Directory operations into a unified professional interface.
+Service Desk Manager is a focused utility for network and Active Directory lookup operations.
 
 Features:
-📧 Email Management
-• Bulk email sending with Outlook template support
-• Dynamic keyword mapping and replacement
-• Preview mode and progress tracking
-
 🔍 Network Diagnostics
-• Batch ping operations with concurrent execution
-• DNS resolution and response time tracking
-• CSV export for reporting
+• Batch ping operations with hostname/IP results and export to CSV
 
 🖥️ RDP Management
-• Bulk RDP session launcher
-• Auto-typer for credentials (useful when copy/paste is disabled)
-• Always-on-top popup with 3-second countdown
+• Bulk RDP session launcher by list
 
 🗂️ Active Directory
-• Computer deletion with safety confirmations
-• PC movement (single and bulk) between OUs
-• User search by name or ID with Windows-style OU paths
-• Set PC Description field with custom text
-• Uses Powershell for all AD operations with robust error handling
-
-🔐 Security
-• In-memory credential storage (no disk persistence)
-• Password field copy/paste protection
-• Secure credential management
+• User search by partial name or user ID
+• AD connection test utility
 
 Built with PySide6 and Python."""
         
