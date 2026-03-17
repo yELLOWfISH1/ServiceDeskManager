@@ -39,13 +39,13 @@ class ADTab(QWidget):
         title.setStyleSheet("color: #2ecc71;")
         main_layout.addWidget(title)
 
-        info_label = QLabel("Enter full or partial name/user ID to list all matches")
+        info_label = QLabel("Enter full or partial name/user ID or UPN to list matches")
         info_label.setStyleSheet("color: #999999; font-size: 10px;")
         main_layout.addWidget(info_label)
 
         search_row = QHBoxLayout()
         self.user_search = QLineEdit()
-        self.user_search.setPlaceholderText("e.g., Jack or jsmith")
+        self.user_search.setPlaceholderText("e.g., SCGLOBAL\\jsmith, jsmith, or jsmith@scglobal.local")
         search_row.addWidget(self.user_search)
 
         search_btn = QPushButton("Search")
@@ -120,7 +120,7 @@ class ADTab(QWidget):
             self.user_result.setText("❌ Failed to connect to AD server")
             return
 
-        users = manager.search_users(search_term)
+        users = manager.get_user_ou(search_term)
         manager.disconnect()
 
         if not users:
@@ -131,9 +131,11 @@ class ADTab(QWidget):
         for i, user_info in enumerate(users, start=1):
             lines.append(f"[{i}] Display Name: {user_info['displayName']}")
             lines.append(f"    User ID: {user_info['sAMAccountName']}")
-            lines.append(f"    OU: {user_info['ou_windows']}")
+            lines.append(f"    LDAP OU: {user_info['ou_ldap']}")
+            lines.append(f"    Windows OU: {user_info['ou_windows']}")
             lines.append("")
 
         lines.append("[Easy Copy: Highlight and Ctrl+C]")
         self.user_result.setText("\n".join(lines))
-        self.user_search.clear()
+        self.user_search.clear()
+

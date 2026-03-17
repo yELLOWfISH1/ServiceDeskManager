@@ -304,13 +304,25 @@ class LDAPManager:
             if not self.connect():
                 return []
 
-        term = self._escape_ps(search_term)
+        term = self._escape_ps(search_term.strip())
+        if not term:
+            return []
+
+        # Support domain\user and plain username or UPN
+        if '\\' in term:
+            term = term.split('\\')[-1]
+
+        exact = term
+        wildcard = f"*{term}*"
+
         credential_block = self._credential_block()
         script = (
             "$ErrorActionPreference='Stop'; "
             "Import-Module ActiveDirectory -ErrorAction Stop; "
             f"{credential_block}"
-            "$filter = \"SamAccountName -like '*" + term + "*' -or UserPrincipalName -like '*" + term + "*' -or Name -like '*" + term + "*' -or DisplayName -like '*" + term + "*'\"; "
+            "$filter = \"SamAccountName -eq '" + exact + "' -or UserPrincipalName -eq '" + exact + "' -or "
+            "SamAccountName -like '" + wildcard + "' -or UserPrincipalName -like '" + wildcard + "' -or "
+            "Name -like '" + wildcard + "' -or DisplayName -like '" + wildcard + "'\"; "
             "$params = @{ Filter = $filter; Properties = @('DisplayName','SamAccountName','DistinguishedName') }; "
             f"if ('{self._escape_ps(self.server_address)}') {{ $params['Server'] = '{self._escape_ps(self.server_address)}' }}; "
             f"if ('{self._escape_ps(self.base_dn)}') {{ $params['SearchBase'] = '{self._escape_ps(self.base_dn)}' }}; "
@@ -355,34 +367,107 @@ class LDAPManager:
         users = self.search_users(search_term)
         return users[0] if users else None
     
+    def _normalize_input_user(self, search_term: str) -> str:
+        """Normalize user input (strip domain prefix and whitespace)."""
+        if not search_term:
+            return ""
+
+        term = search_term.strip()
+        # Accept domain\username or username@domain
+        if '\\' in term:
+            term = term.split('\\')[-1]
+        if '@' in term:
+            term = term.split('@')[0]
+
+        return term
+
+    def get_user_ou(self, search_term: str):
+        """Fast user OU lookup by partial name or user ID (base domain SCGLOBAL)."""
+        if not self.connected:
+            if not self.connect():
+                return []
+
+        term = self._normalize_input_user(search_term)
+        if not term:
+            return []
+
+        exact = self._escape_ps(term)
+        wildcard = self._escape_ps(f"{term}*")
+        wildcard_all = self._escape_ps(f"*{term}*")
+
+        credential_block = self._credential_block()
+
+        script = (
+            "$ErrorActionPreference='Stop'; "
+            "Import-Module ActiveDirectory -ErrorAction Stop; "
+            f"{credential_block}"
+            "$filter = \"SamAccountName -eq '" + exact + "' -or "
+            "SamAccountName -like '" + wildcard + "' -or "
+            "SamAccountName -like '" + wildcard_all + "' -or "
+            "UserPrincipalName -like '" + exact + "@*' -or "
+            "Name -like '" + wildcard_all + "' -or "
+            "DisplayName -like '" + wildcard_all + "'\"; "
+            "$params = @{ Filter = $filter; Properties = @('DisplayName','SamAccountName','DistinguishedName') }; "
+            f"if ('{self._escape_ps(self.server_address)}') {{ $params['Server'] = '{self._escape_ps(self.server_address)}' }}; "
+            f"if ('{self._escape_ps(self.base_dn)}') {{ $params['SearchBase'] = '{self._escape_ps(self.base_dn)}' }}; "
+            "if ($Cred) { $params['Credential'] = $Cred }; "
+            "$users = Get-ADUser @params | Sort-Object SamAccountName | Select-Object -First 20 DisplayName,SamAccountName,DistinguishedName; "
+            "if (-not $users) { Write-Output '[]'; exit 0 }; "
+            "$users | ConvertTo-Json -Compress"
+        )
+
+        ok, out, _ = self._run_ps(script)
+        if not ok or not out:
+            return []
+
+        try:
+            data = json.loads(out)
+            if isinstance(data, dict):
+                data = [data]
+
+            results = []
+            for entry in data:
+                dn = str(entry.get('DistinguishedName', ''))
+                ou_ldap = dn.split(',', 1)[1] if ',' in dn else 'Unknown OU'
+                results.append({
+                    'displayName': str(entry.get('DisplayName') or 'N/A'),
+                    'sAMAccountName': str(entry.get('SamAccountName') or 'N/A'),
+                    'ou_ldap': ou_ldap,
+                    'ou_windows': str(self._dn_to_windows_path(dn)),
+                    'dn': dn,
+                })
+            return results
+        except Exception:
+            return []
+
     def _dn_to_windows_path(self, dn: str) -> str:
         r"""
         Convert LDAP DN to Windows-style OU path
-        
+
         Example:
             Input: CN=John Smith,OU=Users,OU=TestOU,DC=mydomain,DC=com
             Output: mydomain.com\TestOU\Users
-        
+
         Args:
             dn: Distinguished Name string
-        
+
         Returns:
             Windows-style path (domain\OU1\OU2\...)
         """
         try:
             # Split DN into parts
             parts = [p.strip() for p in dn.split(',')]
-            
+
             # Extract DC parts for domain
             dc_parts = []
             ou_parts = []
-            
+
             for part in parts:
                 if part.startswith('DC='):
                     dc_parts.append(part.split('=')[1])
                 elif part.startswith('OU='):
                     ou_parts.append(part.split('=')[1])
-            
+
             # Build Windows path: domain\OU1\OU2\... (reverse OU order)
             domain = '.'.join(dc_parts) if dc_parts else 'domain'
             if ou_parts:
@@ -390,7 +475,7 @@ class LDAPManager:
                 windows_path = domain + '\\' + '\\'.join(ou_parts)
             else:
                 windows_path = domain
-            
+
             return windows_path
         except Exception as e:
             return f"Error converting path: {str(e)}"
